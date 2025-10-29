@@ -1010,7 +1010,7 @@ end
 function __lookup_unique_name_in_module(mod, name)
     new_name = name
     tab = MLIR.IR.SymbolTable(MLIR.IR.Operation(mod))
-    for i in 0:100000
+    for i in 0:10000
         new_name = i == 0 ? name : name * "_" * string(i)
         MLIR.IR.mlirIsNull(MLIR.API.mlirSymbolTableLookup(tab, new_name)) && return new_name
     end
@@ -1095,24 +1095,92 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
         return Reactant.call_with_reactant(f, scalar_args...)
     end
 
-    argprefix::Symbol = gensym("broadcastarg")
-    resprefix::Symbol = gensym("broadcastresult")
-    resargprefix::Symbol = gensym("broadcastresarg")
+    # Create a cache key based on the function and argument types
+    # This allows us to reuse the same MLIR function for identical signatures
+    seen = Reactant.OrderedIdDict()
+    cache_key = []
+    Reactant.make_tracer(seen, (f, args...), cache_key, Reactant.TracedToTypes)
+    cache = Reactant.Compiler.callcache()
+    
+    local argprefix::Symbol, resprefix::Symbol, resargprefix::Symbol
+    local f_name::String, fnwrap::Bool
+    local func_cached::Bool = false
+    
+    if haskey(cache, cache_key)
+        # Function with this signature already exists - reuse it
+        cached = cache[cache_key]
+        f_name = cached.f_name
+        fnwrap = cached.fnwrapped
+        argprefix = cached.argprefix
+        resprefix = cached.resprefix
+        resargprefix = cached.resargprefix
+        func_cached = true
+    else
+        # Create new function - will be added to cache below
+        argprefix = gensym("broadcastarg")
+        resprefix = gensym("broadcastresult")
+        resargprefix = gensym("broadcastresarg")
+        func_cached = false
+    end
 
-    mlir_fn_res = make_mlir_fn(
-        f,
-        args,
-        (),
-        string(f) * "_broadcast_scalar",
-        false;
-        toscalar=true,
-        argprefix,
-        resprefix,
-        resargprefix,
-    )
-    fnwrap = mlir_fn_res.fnwrapped
-    func2 = mlir_fn_res.f
-    (; result, seen_args, linear_args, linear_results) = mlir_fn_res
+    # Generate the MLIR function (only if not cached)
+    if !func_cached
+        mlir_fn_res = make_mlir_fn(
+            f,
+            args,
+            (),
+            string(f) * "_broadcast_scalar",
+            false;
+            toscalar=true,
+            argprefix,
+            resprefix,
+            resargprefix,
+        )
+        fnwrap = mlir_fn_res.fnwrapped
+        func2 = mlir_fn_res.f
+        (; result, seen_args, linear_args, linear_results) = mlir_fn_res
+        
+        # Get the function name that was assigned
+        fname_attr = get_attribute_by_name(func2, "sym_name")
+        f_name = Base.String(fname_attr)
+        
+        # Cache this function for future reuse
+        mlir_result_types = MLIR.IR.Type[]  # Not needed for enzyme.batch
+        mutated_args = Int[]  # Not applicable for broadcast functions
+        cache[cache_key] = (;
+            f_name,
+            mlir_result_types,
+            traced_result=result,
+            mutated_args,
+            linear_results,
+            fnwrapped=fnwrap,
+            argprefix,
+            resprefix,
+            resargprefix,
+        )
+        
+        # Clean up the temporary function object
+        func2.operation = MLIR.API.MlirOperation(C_NULL)
+    else
+        # Function is cached - we need to regenerate traced objects for this call
+        # but the MLIR function definition is already in the module
+        mlir_fn_res = make_mlir_fn(
+            f,
+            args,
+            (),
+            f_name,  # Use the cached function name
+            false;
+            toscalar=true,
+            argprefix,
+            resprefix,
+            resargprefix,
+        )
+        func2 = mlir_fn_res.f
+        (; result, seen_args, linear_args, linear_results) = mlir_fn_res
+        
+        # Clean up
+        func2.operation = MLIR.API.MlirOperation(C_NULL)
+    end
 
     invmap = IdDict()
     for (k, v) in seen_args
@@ -1132,8 +1200,7 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
         ) for arg in linear_results
     ]
 
-    fname = get_attribute_by_name(func2, "sym_name")
-    fname = MLIR.IR.FlatSymbolRefAttribute(Base.String(fname))
+    fname_ref = MLIR.IR.FlatSymbolRefAttribute(f_name)
 
     batch_inputs = MLIR.IR.Value[]
 
@@ -1152,7 +1219,7 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
     res = MLIR.Dialects.enzyme.batch(
         batch_inputs;
         outputs=out_tys2,
-        fn=fname,
+        fn=fname_ref,
         batch_shape=MLIR.IR.DenseArrayAttribute([Int64(i) for i in OutShape]),
     )
 
@@ -1185,8 +1252,6 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
     traced2_result = Reactant.make_tracer(
         seen_results, result, (), Reactant.TracedSetPath; tobatch=OutShape
     )
-
-    func2.operation = MLIR.API.MlirOperation(C_NULL)
 
     return traced2_result
 end
