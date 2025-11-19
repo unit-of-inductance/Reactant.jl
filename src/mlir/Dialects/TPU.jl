@@ -476,12 +476,15 @@ function enqueue_indirect_dma(
     )
 end
 
-function erase_memref_layout(operand::Value; result::IR.Type, location=Location())
-    op_ty_results = IR.Type[result,]
+function erase_memref_layout(
+    operand::Value; result=nothing::Union{Nothing,IR.Type}, location=Location()
+)
+    op_ty_results = IR.Type[]
     operands = Value[operand,]
     owned_regions = Region[]
     successors = Block[]
     attributes = NamedAttribute[]
+    !isnothing(result) && push!(op_ty_results, result)
 
     return create_operation(
         "tpu.erase_memref_layout",
@@ -490,8 +493,8 @@ function erase_memref_layout(operand::Value; result::IR.Type, location=Location(
         owned_regions,
         successors,
         attributes,
-        results=op_ty_results,
-        result_inference=false,
+        results=(length(op_ty_results) == 0 ? nothing : op_ty_results),
+        result_inference=(length(op_ty_results) == 0 ? true : false),
     )
 end
 
@@ -900,6 +903,38 @@ function prng_set_seed_32(seeds::Vector{Value}; location=Location())
 
     return create_operation(
         "tpu.prng_set_seed_32",
+        location;
+        operands,
+        owned_regions,
+        successors,
+        attributes,
+        results=op_ty_results,
+        result_inference=false,
+    )
+end
+
+"""
+`pack_elementwise`
+
+Packs multiple `sources` elementwise into a single vector of a narrower `target_type`.
+
+The number of `sources` must equal the packing factor, which is the ratio of
+the element bitwidth of the `sources` to the element bitwidth of the
+`target_type`. Elements from the `sources` are interleaved and packed into
+each word of the `output`, ordered from lowest to highest bits,
+corresponding to their order in the `sources`.
+"""
+function pack_elementwise(
+    sources::Vector{Value}; output::IR.Type, target_type, location=Location()
+)
+    op_ty_results = IR.Type[output,]
+    operands = Value[sources...,]
+    owned_regions = Region[]
+    successors = Block[]
+    attributes = NamedAttribute[namedattribute("target_type", target_type),]
+
+    return create_operation(
+        "tpu.pack_elementwise",
         location;
         operands,
         owned_regions,
@@ -1610,6 +1645,39 @@ function truncf(in::Value; out::IR.Type, rounding_mode, location=Location())
 
     return create_operation(
         "tpu.truncf",
+        location;
+        operands,
+        owned_regions,
+        successors,
+        attributes,
+        results=op_ty_results,
+        result_inference=false,
+    )
+end
+
+"""
+`unpack_elementwise`
+
+Unpacks a single vector from `source`, which contains multiple `source_type`
+vectors packed elementwise.
+
+The `index` selects which packed value to extract from each word of `source`.
+An `index` of 0 corresponds to the lowest bits. The extracted values are
+cast to the output element type.
+"""
+function unpack_elementwise(
+    source::Value; output::IR.Type, source_type, index, location=Location()
+)
+    op_ty_results = IR.Type[output,]
+    operands = Value[source,]
+    owned_regions = Region[]
+    successors = Block[]
+    attributes = NamedAttribute[
+        namedattribute("source_type", source_type), namedattribute("index", index)
+    ]
+
+    return create_operation(
+        "tpu.unpack_elementwise",
         location;
         operands,
         owned_regions,

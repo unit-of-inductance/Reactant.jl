@@ -3,7 +3,7 @@ module Reactant
 using ReactantCore:
     ReactantCore, @trace, within_compile, MissingTracedValue, materialize_traced_array
 
-using LinearAlgebra: LinearAlgebra, RowMaximum
+using LinearAlgebra: LinearAlgebra, RowMaximum, NoPivot
 using Random: Random, AbstractRNG
 using EnumX: @enumx
 using Functors: Functors, @leaf
@@ -350,6 +350,9 @@ function set_default_backend(backend::Union{String,XLA.AbstractClient})
     XLA.set_default_backend(backend)
     return nothing
 end
+
+# Not part of the public API. Exclusively for testing purposes.
+include("TestUtils.jl")
 
 include("Precompile.jl")
 

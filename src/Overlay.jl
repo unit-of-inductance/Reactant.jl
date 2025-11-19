@@ -187,7 +187,11 @@ end
 end
 
 @reactant_overlay @noinline function Base.map(f, x::AbstractArray, ys::AbstractArray...)
-    if use_overlayed_version(x) || looped_any(use_overlayed_version, ys)
+    if (
+        use_overlayed_version(x) ||
+        use_overlayed_version(f) ||
+        looped_any(use_overlayed_version, ys)
+    )
         return TracedRArrayOverrides.overloaded_map(f, x, ys...)
     else
         return Base.inferencebarrier(Base.map)(CallWithReactant(f), x, ys...)
@@ -200,6 +204,7 @@ end
     if (
         use_overlayed_version(y) ||
         use_overlayed_version(x) ||
+        use_overlayed_version(f) ||
         looped_any(use_overlayed_version, xs)
     )
         return TracedRArrayOverrides.overloaded_map!(f, y, x, xs...)
@@ -209,7 +214,7 @@ end
 end
 
 @reactant_overlay @noinline function Base._all(f, x::AbstractArray, dims)
-    if use_overlayed_version(x)
+    if use_overlayed_version(x) || use_overlayed_version(f)
         return TracedRArrayOverrides.overloaded_mapreduce(f, &, x; dims)
     else
         return Base.inferencebarrier(Base._all)(CallWithReactant(f), x, dims)
@@ -217,7 +222,7 @@ end
 end
 
 @reactant_overlay @noinline function Base._any(f, x::AbstractArray, dims)
-    if use_overlayed_version(x)
+    if use_overlayed_version(x) || use_overlayed_version(f)
         return TracedRArrayOverrides.overloaded_mapreduce(f, |, x; dims)
     else
         return Base.inferencebarrier(Base._any)(CallWithReactant(f), x, dims)
@@ -225,36 +230,42 @@ end
 end
 
 # LinearAlgebra
-@reactant_overlay @noinline function LinearAlgebra.lu(x::AbstractArray; kwargs...)
-    if use_overlayed_version(x)
-        return TracedLinearAlgebra.overloaded_lu(x, RowMaximum(); kwargs...)
-    else
-        return Base.inferencebarrier(LinearAlgebra.lu)(x; kwargs...)
-    end
-end
-@reactant_overlay @noinline function LinearAlgebra.lu(
-    x::AbstractArray, pivot::RowMaximum; kwargs...
+## Various factorizations
+## TODO: specialize for `cholesky!` --> cholcopy
+factorization_copy(f::F, x, pivot) where {F} = x
+factorization_copy(f::F, x) where {F} = x
+
+for (jlop, rop, default_pivot) in (
+    (:lu, :overloaded_lu, RowMaximum),
+    (:lu!, :overloaded_lu, RowMaximum),
+    (:cholesky, :overloaded_cholesky, NoPivot),
+    (:cholesky!, :overloaded_cholesky, NoPivot),
 )
-    if use_overlayed_version(x)
-        return TracedLinearAlgebra.overloaded_lu(x, pivot; kwargs...)
-    else
-        return Base.inferencebarrier(LinearAlgebra.lu)(x, pivot; kwargs...)
-    end
-end
-@reactant_overlay @noinline function LinearAlgebra.lu!(x::AbstractArray; kwargs...)
-    if use_overlayed_version(x)
-        return TracedLinearAlgebra.overloaded_lu(x, RowMaximum(); kwargs...)
-    else
-        return Base.inferencebarrier(LinearAlgebra.lu!)(x; kwargs...)
-    end
-end
-@reactant_overlay @noinline function LinearAlgebra.lu!(
-    x::AbstractArray, pivot::RowMaximum; kwargs...
-)
-    if use_overlayed_version(x)
-        return TracedLinearAlgebra.overloaded_lu(x, pivot; kwargs...)
-    else
-        return Base.inferencebarrier(LinearAlgebra.lu!)(x, pivot; kwargs...)
+    @eval begin
+        @reactant_overlay @noinline function LinearAlgebra.$(jlop)(
+            x::AbstractArray; kwargs...
+        )
+            if use_overlayed_version(x)
+                pivot = $(default_pivot)()
+                return TracedLinearAlgebra.$(rop)(
+                    factorization_copy(LinearAlgebra.$(jlop), x, pivot), pivot; kwargs...
+                )
+            else
+                return Base.inferencebarrier(LinearAlgebra.$(jlop))(x; kwargs...)
+            end
+        end
+
+        @reactant_overlay @noinline function LinearAlgebra.$(jlop)(
+            x::AbstractArray, pivot::$(default_pivot); kwargs...
+        )
+            if use_overlayed_version(x)
+                return TracedLinearAlgebra.$(rop)(
+                    factorization_copy(LinearAlgebra.$(jlop), x, pivot), pivot; kwargs...
+                )
+            else
+                return Base.inferencebarrier(LinearAlgebra.$(jlop))(x, pivot; kwargs...)
+            end
+        end
     end
 end
 

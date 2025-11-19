@@ -994,6 +994,7 @@ cc_library(
             "-Wl,-exported_symbol,_ReactantCudaDeviceGetComputeCapalilityMinor",
             "-Wl,-exported_symbol,_ReactantCudaDeviceGetWarpSizeInThreads",
             "-Wl,-exported_symbol,_ReactantCudaDeviceGetProperties",
+            "-Wl,-exported_symbol,_ReactantCudaGetRegsSpillsMaxThreadsFromBinary",
             "-Wl,-exported_symbol,_PjRtDeviceGetLocalDeviceId",
             "-Wl,-exported_symbol,_PjRtDeviceGetGlobalDeviceId",
             "-Wl,-exported_symbol,_PjRtDeviceGetLocalHardwareId",
@@ -1040,6 +1041,24 @@ cc_library(
             "-Wl,-exported_symbol,_mlirGetFunctionTypeFromOperation",
             "-Wl,-exported_symbol,_mlirIsFunctionOpInterface",
             "-Wl,-exported_symbol,_convertMlirModuleToHloModule",
+            "-Wl,-exported_symbol,_parseAndReturnUnverifiedHloModule",
+            "-Wl,-exported_symbol,_hloModuleGetEntryComputation",
+            "-Wl,-exported_symbol,_freeHloComputation",
+            "-Wl,-exported_symbol,_hloComputationToString",
+            "-Wl,-exported_symbol,_hloComputationGetInstructionsPostOrder",
+            "-Wl,-exported_symbol,_freeHloInstruction",
+            "-Wl,-exported_symbol,_hloInstructionToString",
+            "-Wl,-exported_symbol,_hloInstructionGetOpcode",
+            "-Wl,-exported_symbol,_hloInstructionIsFusion",
+            "-Wl,-exported_symbol,_hloInstructionGetFusionKind",
+            "-Wl,-exported_symbol,_hloOpcodeToString",
+            "-Wl,-exported_symbol,_hloFusionKindToString",
+            "-Wl,-exported_symbol,_hloInstructionFusedInstructionsComputation",
+            "-Wl,-exported_symbol,_deviceDescriptionToString",
+            "-Wl,-exported_symbol,_CudaGetStreamExecutorDeviceDescription",
+            "-Wl,-exported_symbol,_CreateGPUPerformanceModel",
+            "-Wl,-exported_symbol,_RunAnalysisOnHloModule",
+            "-Wl,-exported_symbol,_EstimateRunTimeForInstruction",
         ],
     }),
     linkstatic = True,
@@ -1109,6 +1128,7 @@ cc_library(
         "@xla//xla/pjrt:status_casters",
         "@xla//xla/python/ifrt",
         "@xla//xla/python/pjrt_ifrt",
+        "@xla//xla/hlo/parser:hlo_parser",
         "@xla//xla/hlo/translate:stablehlo",
         "@xla//xla/python/ifrt_proxy/server:grpc_server",
         "@xla//xla/python/ifrt_proxy/client:grpc_client",
@@ -1155,7 +1175,9 @@ cc_library(
         "@com_google_absl//absl/log:globals",
         "@llvm-project//mlir:CAPIIRObjects",
         "@llvm-project//mlir:CAPILLVMObjects",
-        "@jax//jaxlib/mosaic:tpu_dialect_capi_objects",
+
+        # Broken upstream x/ref https://github.com/jax-ml/jax/issues/33344
+        # "@jax//jaxlib/mosaic:tpu_dialect_capi_objects",
         "@jax//jaxlib/triton:triton_dialect_capi_objects",
         "@xla//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
         "@stablehlo//:linalg_passes",
@@ -1444,6 +1466,24 @@ gentbl_cc_library(
         "@enzyme_ad//src/enzyme_ad/jax:EnzymeXLADialectTdFiles",
         "@llvm-project//mlir:GPUOpsTdFiles",
         "@stablehlo//:stablehlo_ops_td_files",
+    ],
+)
+
+gentbl_cc_library(
+    name = "TritonExtJLIncGen",
+    tbl_outs = [
+        (
+            [
+                "--generator=jl-op-defs",
+                "--disable-module-wrap=0",
+            ],
+            "TritonExt.jl",
+        ),
+    ],
+    tblgen = "//:mlir-jl-tblgen",
+    td_file = "@enzyme_ad//src/enzyme_ad/jax:Dialect/TritonExt/Ops.td",
+    deps = [
+        "@enzyme_ad//src/enzyme_ad/jax:TritonExtDialectTdFiles",
     ],
 )
 

@@ -3,6 +3,7 @@ module Compiler
 using Reactant_jll
 using Libdl: dlsym
 using LinearAlgebra: BlasInt
+using Functors: Functors
 
 import ..Reactant:
     Reactant,
@@ -272,7 +273,7 @@ function create_result(
 end
 
 function create_result(
-    tocopy::ConcretePJRTNumber{T,D,S},
+    tocopy::ConcretePJRTNumber{T,D},
     path,
     result_stores,
     path_to_shard_info,
@@ -283,7 +284,7 @@ function create_result(
     result_cache,
     var_idx,
     resultgen_code,
-) where {T,D,S}
+) where {T,D}
     if !haskey(result_cache, tocopy)
         sym = Symbol("result", var_idx[])
         var_idx[] += 1
@@ -314,7 +315,7 @@ function create_result(
 end
 
 function create_result(
-    tocopy::ConcreteIFRTNumber{T,S},
+    tocopy::ConcreteIFRTNumber{T},
     path,
     result_stores,
     path_to_shard_info,
@@ -325,7 +326,7 @@ function create_result(
     result_cache,
     var_idx,
     resultgen_code,
-) where {T,S}
+) where {T}
     if !haskey(result_cache, tocopy)
         sym = Symbol("result", var_idx[])
         var_idx[] += 1
@@ -356,7 +357,7 @@ function create_result(
 end
 
 function create_result(
-    tocopy::ConcretePJRTArray{T,N,D,S},
+    tocopy::ConcretePJRTArray{T,N,D},
     path,
     result_stores,
     path_to_shard_info,
@@ -367,7 +368,7 @@ function create_result(
     result_cache,
     var_idx,
     resultgen_code,
-) where {T,N,D,S}
+) where {T,N,D}
     if !haskey(result_cache, tocopy)
         sym = Symbol("result", var_idx[])
         var_idx[] += 1
@@ -399,7 +400,7 @@ function create_result(
 end
 
 function create_result(
-    tocopy::ConcreteIFRTArray{T,N,S},
+    tocopy::ConcreteIFRTArray{T,N},
     path,
     result_stores,
     path_to_shard_info,
@@ -410,7 +411,7 @@ function create_result(
     result_cache,
     var_idx,
     resultgen_code,
-) where {T,N,S}
+) where {T,N}
     if !haskey(result_cache, tocopy)
         sym = Symbol("result", var_idx[])
         var_idx[] += 1
@@ -692,6 +693,7 @@ const AGGRESSIVE_SUM_TO_CONV = Ref(false)
 const AGGRESSIVE_PROPAGATION = Ref(false)
 const DUS_SLICE_SIMPLIFY = Ref(true)
 const CONCATS_TO_DUS = Ref(false)
+const WHILE_UNROLL_THRESHOLD = Ref(4)
 
 # Optimization passes via transform dialect
 function optimization_passes(
@@ -700,9 +702,10 @@ function optimization_passes(
     dus_to_concat::Bool=false,
     recognize_comms::Bool=true,
     lower_comms::Bool=true,
-    max_constant_threshold::Int=1024,
     backend::String="gpu",
 )
+    (; max_constant_threshold) = compile_options
+
     transform_passes_list = [
         "patterns=compare_op_canon<16>",
         "transpose_transpose<16>",
@@ -757,6 +760,9 @@ function optimization_passes(
         "noop_slice<16>",
         "noop_reverse<16>",
         "slice_slice<16>",
+        "dynamic_slice_slice<16>",
+        "slice_dynamic_slice<16>",
+        "dynamic_slice_dynamic_slice<16>",
         "shift_right_logical_simplify<16>",
         "slice_simplify<16>",
         "convert_simplify<16>",
@@ -814,20 +820,7 @@ function optimization_passes(
         "dus_dus",
         "dus_dus_concat",
         "abs_positive_simplify",
-        "transpose_unary_transpose_abs",
-        "transpose_unary_transpose_neg",
-        "transpose_unary_transpose_sqrt",
-        "transpose_unary_transpose_rsqrt",
-        "transpose_unary_transpose_ceil",
-        "transpose_unary_transpose_convert",
-        "transpose_unary_transpose_cosine",
-        "transpose_unary_transpose_exp",
-        "transpose_unary_transpose_expm1",
-        "transpose_unary_transpose_log",
-        "transpose_unary_transpose_log1p",
-        "transpose_unary_transpose_sign",
-        "transpose_unary_transpose_sine",
-        "transpose_unary_transpose_tanh",
+        "transpose_elementwise_transpose",
         "select_comp_iota_const_simplify<1>",
         "sign_abs_simplify<1>",
         "broadcastindim_is_reshape",
@@ -903,14 +896,16 @@ function optimization_passes(
         "self_mul_to_convolution_like($(Int(backend == "tpu")))",
         "subtract_multiply_const_to_add_mul_const",
         "trivial_reduce_window_to_reduce_op",
+        "case_to_if",
         "dot_general_add_distributive_simplify",
         "dot_general_subtract_distributive_simplify",
-        "dus_to_dynamic_pad",
-        "dynamic_pad_to_pad",
         "remove_no_ops_from_while_loop",
         "while_is_copy_simplify",
         "split_variadic_scatter_op",
         "dynamic_slice_simplify",
+        "enzyme_hlo_unroll($(WHILE_UNROLL_THRESHOLD[]))",
+        "dot_general_only_diagonal_access",
+        "transpose_symmetric_simplify",
     ]
 
     if !compile_options.disable_auto_batching_passes
@@ -937,6 +932,7 @@ function optimization_passes(
                 "broadcastindim_slice_to_batch",
                 "reducewindow_slice_to_batch",
                 "elementwise_slice_to_batch",
+                "greedy_while_loop_batch_fission",
             ],
         )
     end
@@ -953,6 +949,10 @@ function optimization_passes(
                 "transpose_licm(0)",
                 "broadcastindim_licm(0)",
                 "reshape_licm(0)",
+                "dot_general_licm(0)",
+                "reduce_licm(0)",
+                "reduce_window_licm(0)",
+                "reverse_licm(0)",
             ],
         )
     end
@@ -1022,6 +1022,8 @@ function optimization_passes(
                 "rotate_pad",
                 "concat_multipad",
                 "speculate_if_pad_to_select",
+                "dus_to_dynamic_pad",
+                "dynamic_pad_to_pad",
             ],
         )
 
@@ -1138,6 +1140,9 @@ function optimization_passes(
                 "concat_appending_reshape",
                 "slice_reshape",
                 "slice_reshape_slice<1>",
+                "dynamic_slice_reshape_slice<1>",
+                "slice_reshape_dynamic_slice<1>",
+                "dynamic_slice_reshape_dynamic_slice<1>",
                 "slice_reshape_concat<1>",
                 "slice_reshape_elementwise<1>",
                 "slice_reshape_dot_general<1>",
@@ -1184,17 +1189,7 @@ function optimization_passes(
             transform_passes_list,
             [
                 "reorder_elementwise_and_shape_op<16>",
-                "binary_op_transpose_simplify_add",
-                "binary_op_transpose_simplify_sub",
-                "binary_op_transpose_simplify_mul",
-                "binary_op_transpose_simplify_div",
-                "binary_op_transpose_simplify_min",
-                "binary_op_transpose_simplify_max",
-                "binary_op_transpose_simplify_pow",
-                "binary_op_transpose_simplify_rem",
-                "binary_op_transpose_simplify_or",
-                "binary_op_transpose_simplify_and",
-                "binary_op_transpose_simplify_xor",
+                "elementwise_all_transpose_operands_simplify",
                 "slice_transpose",
                 "einsum_transpose<1>",
                 "slice_reshape_transpose<1>",
@@ -1308,7 +1303,7 @@ end
 
 # TODO we want to be able to run the more advanced passes via transform dialect as an enzyme intermediate
 # However, this errs as we cannot attach the transform with to the funcop itself [as we run a functionpass].
-const enzyme_pass::String = "enzyme{postpasses=\"arith-raise{stablehlo=true},canonicalize,cse,canonicalize,remove-unnecessary-enzyme-ops,enzyme-simplify-math,canonicalize,cse,canonicalize\"}"
+const enzyme_pass::String = "enzyme{postpasses=\"arith-raise{stablehlo=true},canonicalize,cse,canonicalize,remove-unnecessary-enzyme-ops,enzyme-simplify-math,canonicalize,cse,canonicalize,arith-raise{stablehlo=true}\"}"
 
 function run_pass_pipeline!(mod, pass_pipeline, key=""; enable_verifier=true)
     pm = MLIR.IR.PassManager()
@@ -1578,7 +1573,8 @@ function compile_mlir!(
     args,
     compile_options::CompileOptions,
     callcache=default_callcache(),
-    sdycache=default_sdycache();
+    sdycache=default_sdycache(),
+    sdygroupidcache=default_sdygroupidcache();
     fn_kwargs=(),
     backend="gpu",
     runtime::Union{Val{:PJRT},Val{:IFRT}},
@@ -1595,6 +1591,7 @@ function compile_mlir!(
     MLIR.IR.activate!(MLIR.IR.body(mod))
     activate_callcache!(callcache)
     activate_sdycache!(sdycache)
+    activate_sdygroupidcache!(sdygroupidcache)
 
     # Save in the TLS whether we are raising.  We identify that condition by
     # checking whether the user set an explicit list of passes, or chose
@@ -1621,6 +1618,7 @@ function compile_mlir!(
     finally
         deactivate_raising!(is_raising)
         deactivate_sdycache!(sdycache)
+        deactivate_sdygroupidcache!(sdygroupidcache)
         deactivate_callcache!(callcache)
         MLIR.IR.deactivate!(MLIR.IR.body(mod))
         MLIR.IR.deactivate!(mod)
@@ -1645,12 +1643,6 @@ function compile_mlir!(
         is_raising = true
         raise isa Bool && (raise = true)
     end
-
-    concrete_seen = OrderedIdDict()
-
-    concrete_result = make_tracer(
-        concrete_seen, traced_result, ("result",), TracedToConcrete; runtime
-    )
 
     toolkit = XLA.CUDA_DATA_DIR[]
 
@@ -1738,6 +1730,8 @@ function compile_mlir!(
         else
             ()
         end
+
+    legal_to_run_shardy_passes = compile_options.optimization_passes === :all
 
     if compile_options.optimization_passes === :all
         run_pass_pipeline!(
@@ -2174,7 +2168,7 @@ function compile_mlir!(
     # shardy passes
     use_shardy_partitioner = false
     result_shardings = missing
-    if is_sharded
+    if is_sharded && legal_to_run_shardy_passes
         module_op = copy(MLIR.IR.Operation(mod))
         mod_copied = MLIR.IR.Module(module_op)
 
@@ -2306,6 +2300,17 @@ function compile_mlir!(
         ]
     end
 
+    if result_shardings !== missing
+        result_shardings_after_masking = eltype(result_shardings)[]
+        for (i, present) in enumerate(results_mask)
+            if present
+                push!(result_shardings_after_masking, result_shardings[i])
+            end
+        end
+    else
+        result_shardings_after_masking = missing
+    end
+
     func3 = MLIR.Dialects.func.func_(;
         sym_name="main",
         function_type=MLIR.IR.FunctionType(in_tys, out_tys2),
@@ -2383,6 +2388,10 @@ function compile_mlir!(
         end
     end
 
+    concrete_result = make_tracer(
+        OrderedIdDict(), traced_result, ("result",), TracedToConcrete; runtime
+    )
+
     return Reactant.TracedUtils.CompiledMlirFnResult(
         fnwrapped,
         func3,
@@ -2403,7 +2412,7 @@ function compile_mlir!(
         mlir_fn_res.unique_meshes,
         mlir_fn_res.mutated_args,
         use_shardy_partitioner,
-        result_shardings,
+        result_shardings_after_masking,
         mlir_fn_res.global_device_ids,
         donated_args_mask,
         Reactant.TracedUtils.is_pure(func3),
@@ -3150,7 +3159,6 @@ function codegen_unflatten!(
                 p in Reactant.TracedUtils.get_paths(arg) if length(p) > 0 && p[1] == :args
             ))
 
-            res = :result
             path = path[2:end]
 
             if in(path, keys(result_stores))
@@ -3245,10 +3253,15 @@ function codegen_unflatten!(
     end
 
     # generate return object which stores the concrete results in some arbitrary way
-    return Expr[
-        unresharded_code..., resultgen_code..., :(result = $result_code), unflatten_code...
-    ],
-    used_shardinfo
+    return (
+        Expr[
+            unresharded_code...,
+            resultgen_code...,
+            :(result = $result_code),
+            unflatten_code...,
+        ],
+        used_shardinfo,
+    )
 end
 
 """
@@ -3817,7 +3830,7 @@ function register_thunk(
     )
 end
 
-for cache_type in (:callcache, :sdycache)
+for cache_type in (:callcache, :sdycache, :sdygroupidcache)
     activate_fn = Symbol(:activate_, cache_type, :!)
     deactivate_fn = Symbol(:deactivate_, cache_type, :!)
     has_fn = Symbol(:_has_, cache_type)
@@ -3862,6 +3875,14 @@ function default_sdycache()
             mesh::Sharding.Mesh,
         }
     }()
+end
+
+mutable struct SdyGroupIDCounter{T}
+    @atomic group_id::T
+end
+
+function default_sdygroupidcache()
+    return SdyGroupIDCounter{Int}(0), Base.IdDict{Union{TracedRArray,TracedRNumber},Int}()
 end
 
 function default_callcache()
