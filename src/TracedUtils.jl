@@ -1206,6 +1206,9 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
             resargprefix,
         )
         
+        # Set traced_result for use below
+        traced_result = result
+        
         # Clean up the temporary function object
         func2.operation = MLIR.API.MlirOperation(C_NULL)
     end
