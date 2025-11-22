@@ -1682,6 +1682,19 @@ mapped_sub(xs...) = stack(map(-, xs...))
     end
 end
 
+@testset "elem_apply caching" begin
+    points = eachcol(Reactant.TestUtils.construct_test_array(Float32, 2, 10))
+    matrix = Reactant.TestUtils.construct_test_array(Float32, 1, 2)
+
+    points_ra = Reactant.to_rarray(points)
+
+    g(points) = sum(matrix * point for point in points)
+
+    g_compiled = @compile g(points_ra)
+
+    @test g_compiled(points_ra) ≈ g(points)
+end
+
 @testset "AbstractRange Unwanted Promotions" begin
     hlo1 = @code_hlo Reactant.promote_to(Reactant.TracedRArray, Base.OneTo(Int32(42)))
     @test !contains(repr(hlo1), "42xi64")
