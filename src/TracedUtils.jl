@@ -1153,28 +1153,24 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
     cache = Reactant.Compiler.callcache()
     
     local argprefix::Symbol, resprefix::Symbol, resargprefix::Symbol
-    local f_name::String, fnwrap::Bool
-    local func_cached::Bool = false
+    local f_name::String, fnwrap::Bool, linear_results
     
     if haskey(cache, cache_key)
         # Function with this signature already exists - reuse it
+        # Do NOT call make_mlir_fn again, just retrieve cached metadata
         cached = cache[cache_key]
         f_name = cached.f_name
         fnwrap = cached.fnwrapped
         argprefix = cached.argprefix
         resprefix = cached.resprefix
         resargprefix = cached.resargprefix
-        func_cached = true
+        linear_results = cached.linear_results
     else
         # Create new function - will be added to cache below
         argprefix = gensym("broadcastarg")
         resprefix = gensym("broadcastresult")
         resargprefix = gensym("broadcastresarg")
-        func_cached = false
-    end
-
-    # Generate the MLIR function (only if not cached)
-    if !func_cached
+        
         mlir_fn_res = make_mlir_fn(
             f,
             args,
@@ -1211,30 +1207,23 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
         
         # Clean up the temporary function object
         func2.operation = MLIR.API.MlirOperation(C_NULL)
-    else
-        # Function is cached - we need to regenerate traced objects for this call
-        # but the MLIR function definition is already in the module
-        mlir_fn_res = make_mlir_fn(
-            f,
-            args,
-            (),
-            f_name,  # Use the cached function name
-            false;
-            toscalar=true,
-            argprefix,
-            resprefix,
-            resargprefix,
-        )
-        func2 = mlir_fn_res.f
-        (; result, seen_args, linear_args, linear_results) = mlir_fn_res
-        
-        # Clean up
-        func2.operation = MLIR.API.MlirOperation(C_NULL)
     end
-
-    invmap = IdDict()
+    
+    # Recreate traced objects for the current call (similar to Ops.call)
+    seen_args = Reactant.OrderedIdDict()
+    Reactant.make_tracer(
+        seen_args,
+        fnwrap ? (f, args) : args,
+        (),
+        Reactant.TracedTrack;
+        toscalar=false,
+    )
+    linear_args = []
     for (k, v) in seen_args
-        invmap[v] = k
+        v isa Reactant.TracedType || continue
+        push!(linear_args, v)
+        # make tracer inserted `()` into the path, here we remove it:
+        v.paths = v.paths[1:(end - 1)]
     end
 
     keys_seen = Reactant.TracedType[k for k in keys(seen_args) if k isa Reactant.TracedType]
