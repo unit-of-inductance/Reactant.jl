@@ -1010,7 +1010,9 @@ end
 function __lookup_unique_name_in_module(mod, name)
     new_name = name
     tab = MLIR.IR.SymbolTable(MLIR.IR.Operation(mod))
-    for i in 0:10000
+    # subject to change I guess, every situation where the a function of the same name is compiled more often than this
+    # is probably a bigger issue
+    for i in 0:10 
         new_name = i == 0 ? name : name * "_" * string(i)
         MLIR.IR.mlirIsNull(MLIR.API.mlirSymbolTableLookup(tab, new_name)) && return new_name
     end
