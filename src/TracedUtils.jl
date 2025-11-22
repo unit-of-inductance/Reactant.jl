@@ -1153,7 +1153,7 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
     cache = Reactant.Compiler.callcache()
     
     local argprefix::Symbol, resprefix::Symbol, resargprefix::Symbol
-    local f_name::String, fnwrap::Bool, linear_results
+    local f_name::String, fnwrap::Bool, linear_results, traced_result
     
     if haskey(cache, cache_key)
         # Function with this signature already exists - reuse it
@@ -1165,6 +1165,7 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
         resprefix = cached.resprefix
         resargprefix = cached.resargprefix
         linear_results = cached.linear_results
+        traced_result = cached.traced_result
     else
         # Create new function - will be added to cache below
         argprefix = gensym("broadcastarg")
@@ -1232,6 +1233,16 @@ function elem_apply(f, args::Vararg{Any,Nargs}) where {Nargs}
     @assert allequal(input_shapes) "input shapes are $(input_shapes)"
     OutShape = isempty(seen_args) ? nothing : first(input_shapes)
     @assert !isnothing(OutShape)
+    
+    # Create a new result object for this call using cached traced_result as template
+    result_seen = Reactant.OrderedIdDict()
+    result = Reactant.make_tracer(
+        result_seen,
+        traced_result,
+        (),
+        Reactant.TracedTrack;
+        tobatch=OutShape,
+    )
 
     out_tys2 = MLIR.IR.Type[
         MLIR.IR.TensorType(
